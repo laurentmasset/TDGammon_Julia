@@ -720,7 +720,7 @@ module Models
     # end
     function select_state_td_gammon_zero(model::AbstractTDGammonZero, player::Int, possible_states::Array)::Array
         best_state = Int8[]
-        best_value = player == Boards.WHITE_PLAYER ? Float32(0) : Float32(1)
+        best_value = player == Boards.WHITE_PLAYER ? Float32(-Inf32) : Float32(Inf32)
         opponent = (player + 1) % 2
         if length(possible_states) > 0
             for state in possible_states
@@ -729,10 +729,12 @@ module Models
                 if player == Boards.WHITE_PLAYER
                     if state_estimate > best_value
                         best_state = deepcopy(state)
+                        best_value = state_estimate
                     end
                 else
                     if state_estimate < best_value
                         best_state = deepcopy(state)
+                        best_value = state_estimate
                     end
                 end
             end
