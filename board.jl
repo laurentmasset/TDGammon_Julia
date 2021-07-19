@@ -518,7 +518,7 @@ module Models
     struct TDGammonZero <: AbstractTDGammonZero
         model::Chain
         TDGammonZero() = new(Chain(
-            Dense(198, 40, σ),
+            Dense(196, 40, σ),
             Dense(40, 1, σ)
         ))
     end
@@ -526,7 +526,7 @@ module Models
     struct TDGammonZeroRelu <:AbstractTDGammonZero
         model::Chain
         TDGammonZeroRelu() = new(Chain(
-            Dense(198,40, relu),
+            Dense(196,40, relu),
             Dense(40, 1, σ)
         ))
     end
@@ -553,6 +553,14 @@ module Models
         if player == Boards.BLACK_PLAYER
             n = -n
         end
+        #=
+        if 1 <= n <= 3
+            point_inputs[n] = 1
+        elseif n > 3
+            point_inputs[4] = (n - 3) / 2
+        end
+        =#
+
         if n == 1  # A "blot" situation
             point_inputs[1] = 1
         end
@@ -562,9 +570,11 @@ module Models
         if n == 3 # A "single spare" situation
             point_inputs[3] = 1
         end
+
         if n > 3 # A "multiple spare" situation
             point_inputs[4] = (n - 3) / 2
         end
+
         return point_inputs
     end
 
@@ -718,10 +728,11 @@ module Models
     #     end
     #     return best_move
     # end
-    function select_state_td_gammon_zero(model::AbstractTDGammonZero, player::Int, possible_states::Array)::Array
+    function select_state_td_gammon_zero(model::AbstractTDGammonZero, player::Int, possible_states::Array)
         best_state = Int8[]
         best_value = player == Boards.WHITE_PLAYER ? Float32(-Inf32) : Float32(Inf32)
-        opponent = (player + 1) % 2
+        best_inputs = nothing
+
         if length(possible_states) > 0
             for state in possible_states
                 inputs = get_inputs(state, player, model)
@@ -730,16 +741,18 @@ module Models
                     if state_estimate > best_value
                         best_state = deepcopy(state)
                         best_value = state_estimate
+                        best_inputs = inputs
                     end
                 else
                     if state_estimate < best_value
                         best_state = deepcopy(state)
                         best_value = state_estimate
+                        best_inputs = inputs
                     end
                 end
             end
         end
-        return best_state
+        return best_state, best_value, best_inputs
     end
 
     function update_weights(model::AbstractTDGammon, eligibility_traces::Array, α,  λ, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
@@ -765,14 +778,16 @@ module Models
         return td_error
     end
 
-    function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, number_of_episodes::Int=1, episodes_already::Int=0)
-
+    function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, number_of_episodes::Int=1, episodes_already::Int=0, decay_learning::Bool=false, dl_rate=0.8, dl_step_size::Int=10000)
+        println("Begin training")
         tab_number_of_plays = zeros(Int, save_after)
         tab_mean_errors = zeros(Float32, save_after)
         tab_number_of_plays_index = 1
+        white_wins = 0
+        last_time = time()
+        #last_rolls = []
         first_episode = episodes_already + 1
         last_episode = episodes_already + number_of_episodes
-        white_wins = 0
         base_name = "$(typeof(model))-$(Dates.format(now(), "yyyymmddHHMMSS"))"
         dir_path = mkdir(string(pwd(),"\\", save_path, base_name))
         log_path = string(dir_path, "\\", base_name, "_log.txt")
@@ -780,6 +795,8 @@ module Models
         $(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s")): Start training begining at episode $first_episode until episode $last_episode saving every $save_after episodes...
             - Type of model: $(typeof(model))
             - Type of NN: $(model.model)
+            - α : $α
+            - λ : $λ
             - Start time: $(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s"))
         =================================================================
         =================================================================
@@ -789,75 +806,55 @@ module Models
         println(f, message)
         close(f)
         for episode in first_episode:last_episode
+            board = Boards.init_board()
+            v = nothing
+            inputs = nothing
             if model isa TDGammonZero || model isa TDGammonZeroRelu
                 eligibility_traces = init_eligibility_traces(model.model)
             end
-            board = Boards.init_board()
             number_of_plays = 0
             number_of_no_moves = 0
-            current_agent = Boards.whos_first()
-            current_state = deepcopy(board)
-            current_state_estimate = 0
-            inputs = []
             error = 0
-            while !Boards.game_over(board)
+            current_agent = Boards.whos_first()
+            game_over = false
+            while !game_over
                 dice = Boards.roll_dice()
-
-                inputs = get_inputs(current_state, current_agent, model)
-                current_state_estimate = model.model(inputs)[1]
-
+                number_of_plays += 1
+                if number_of_plays > 10000
+                    message = "10000 plays, something is probably wrong, exiting"
+                    println(message)
+                    f = open(log_path, "a")
+                    println(f, message)
+                    close(f)
+                    exit()
+                end
                 possible_states = Boards.get_possible_states(current_agent, board, dice)
-
-                next_state = nothing
-
                 if model isa AbstractTDGammonZero
                     if length(possible_states) > 0
-                        next_state = select_state_td_gammon_zero(model, current_agent, possible_states)
+                        board_next, v_next, inputs_next = select_state_td_gammon_zero(model, current_agent, possible_states)
                     end
                 end
-
-                if next_state != nothing && length(next_state) > 0
-                    board = next_state
-                    number_of_plays += 1
-                    number_of_no_moves = 0
-                    if number_of_plays % 1000 == 0
-                        message = "Episode $episode: Game not over after $number_of_plays plays..."
-                        println(message)
+                game_over = Boards.game_over(board_next)
+                if game_over
+                    v_next = current_agent == Boards.WHITE_PLAYER ? Float32(1) : Float32(0)
+                end
+                e = 0
+                if model isa TDGammonTDZero
+                    if number_of_plays > 1
+                        e = abs(update_weights_tdzero(model, α, v, v_next, inputs))
                     end
-                else
-                    number_of_no_moves += 1
-                    if number_of_no_moves > 50
-                        message = "Episode $episode: Unable to move 50 times"
-                        f = open(log_path, "a")
-                        println(f, message)
-                        close(f)
-                        exit()
+                elseif model isa AbstractTDGammonZero
+                    if number_of_plays > 1
+                        e = abs(update_weights(model, eligibility_traces, α, λ, v, v_next, inputs))
                     end
                 end
-                next_state = copy(board)
+                error += e
                 current_agent = (current_agent + 1) % 2
-
-                inputs = get_inputs(next_state, current_agent, model)
-                next_state_estimate = model.model(inputs)[1]
-
-                if !Boards.game_over(board)
-                    if model isa TDGammonZero || model isa TDGammonZeroRelu
-                        e = abs(update_weights(model, eligibility_traces, α, λ, current_state_estimate, next_state_estimate, inputs))
-                    elseif model isa TDGammonTDZero
-                        e = abs(update_weights_tdzero(model, α, current_state_estimate, next_state_estimate, inputs))
-                    end
-                    error += e
-                    current_state = next_state
-                end
+                board = board_next
+                v = v_next
+                inputs = inputs_next
             end
             winner = Boards.winner(board)
-            reward = Float32(winner)
-            if model isa TDGammonZero || model isa TDGammonZeroRelu
-                e = abs(update_weights(model, eligibility_traces, α, λ, current_state_estimate, reward, inputs))
-            elseif model isa TDGammonTDZero
-                e = abs(update_weights_tdzero(model, α, current_state_estimate, reward, inputs))
-            end
-            error += e
             winner_player = winner == Boards.WHITE_PLAYER ? "White" : "Black"
             if winner == Boards.WHITE_PLAYER
                 white_wins += 1
@@ -869,6 +866,9 @@ module Models
             tab_mean_errors[tab_number_of_plays_index] = mean_error
             tab_number_of_plays_index += 1
             if save_after > 0 && episode % save_after == 0
+                new_time = time()
+                diff = new_time - last_time
+                last_time = new_time
                 model_path = string(dir_path, "\\", base_name, "-episode$episode.bson")
                 @save model_path model
                 mean_number_of_plays = mean(tab_number_of_plays)
@@ -876,7 +876,7 @@ module Models
                 mean_errors = mean(tab_mean_errors)
                 std_errors = stdm(tab_mean_errors, mean_errors)
                 mean_white_wins = white_wins / save_after * 100
-                message = "$(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s")): After $episode episodes ==> White wins $mean_white_wins%, Mean of plays: $mean_number_of_plays with a standard deviation of $std_number_of_plays. Mean errors: $mean_errors with a standard deviation of $std_errors"
+                message = "$(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s")): After $episode episodes ==> Time elapsed during last $save_after episodes: $diff s., White wins $mean_white_wins%, Mean of plays: $mean_number_of_plays with a standard deviation of $std_number_of_plays. Mean errors: $mean_errors with a standard deviation of $std_errors"
                 println(message)
                 f = open(log_path, "a")
                 println(f, message)
@@ -884,76 +884,171 @@ module Models
                 tab_number_of_plays_index = 1
                 white_wins = 0
             end
+            if decay_learning && episode % dl_step_size == 0
+                α = α * dl_rate
+                message = "$(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s")): reducing α to $α"
+                println(message)
+                f = open(log_path, "a")
+                println(f, message)
+                close(f)
+            end
         end
     end
+
     function load_model(file_path::String)::AbstractModel
         model = BSON.load(file_path, @__MODULE__)[:model]
         println(model)
         return model
     end
-    function test(white_model::AbstractModel, black_model::AbstractModel, episodes::Int)
-        white_wins = 0
-        black_wins = 0
-        for episode in 1:episodes
-            board = Boards.init_board()
-            number_of_plays = 0
-            number_of_no_moves = 0
-            current_agent = Boards.whos_first()
 
-            while !Boards.game_over(board)
-                dice = Boards.roll_dice()
-                possible_states = Boards.get_possible_states(current_agent, board, dice)
+    function test(model::AbstractModel, number_of_episodes::Int=100)
+        println("Begin testing against random")
+        for i in 1:2
+            white_wins = 0
+            black_wins = 0
 
-                next_state = nothing
+            model_player = i == 1 ? Boards.WHITE_PLAYER : Boards.BLACK_PLAYER
 
-                model = current_agent == Boards.WHITE_PLAYER ? white_model : black_model
+            for episode in 1:number_of_episodes
+                board = Boards.init_board()
+                number_of_plays = 0
+                number_of_no_moves = 0
+                current_agent = Boards.whos_first()
+                game_over = false
+                while !game_over
 
-                if model isa AbstractTDGammonZero
-                    if length(possible_states) > 0
-                        next_state = select_state_td_gammon_zero(model, current_agent, possible_states)
-                    end
-                end
-
-
-                if next_state != nothing
-                    board = next_state
+                    dice = Boards.roll_dice()
                     number_of_plays += 1
-                    number_of_no_moves = 0
-                else
-                    number_of_no_moves += 1
-                    if number_of_no_moves > 50
-                        println("Unable to move 50 times")
-                        exit()
-                    end
-                end
-                current_agent = (current_agent + 1) % 2
-            end
-            winner = Boards.winner(board)
-            if winner == Boards.WHITE_PLAYER
-                white_wins += 1
-                println("Episode: $episode, winner: White, number of plays: $number_of_plays")
-            else
-                black_wins += 1
-                println("Episode: $episode, winner: Black, number of plays: $number_of_plays")
-            end
-        end
-        total_wins = white_wins + black_wins
-        best_player = nothing
-        best_player_type = nothing
-        if white_wins > black_wins
-            best_player = "White"
-            best_player_type = typeof(white_model)
-        elseif white_wins < black_wins
-            best_player = "Black"
-            best_player_type = typeof(black_model)
-        end
-        println("White player wins $white_wins time(s) out of $total_wins, that is $(white_wins/total_wins*100)%")
-        println("Black player wins $black_wins time(s) out of $total_wins, that is $(black_wins/total_wins*100)%")
 
-        if best_player != nothing
-            println("Best player is $best_player that is of type $best_player_type")
-         else
-            println("It's a draw")
+                    possible_states = Boards.get_possible_states(current_agent, board, dice)
+                    board_next = nothing
+                    if model_player == current_agent
+                        if model isa AbstractTDGammonZero
+                            if length(possible_states) > 0
+                                board_next, v_next, inputs_next = select_state_td_gammon_zero(model, current_agent, possible_states)
+                            end
+                        end
+                    else
+                        board_next = rand(possible_states)
+                    end
+                    if board_next != nothing
+                        game_over = Boards.game_over(board_next)
+                        board = board_next
+                        number_of_plays += 1
+                        number_of_no_moves = 0
+                    else
+                        number_of_no_moves += 1
+                        if number_of_no_moves > 50
+                            println("Unable to move 50 times")
+                            exit()
+                        end
+                    end
+                    current_agent = (current_agent + 1) % 2
+                end
+                winner = Boards.winner(board)
+                if winner == Boards.WHITE_PLAYER
+                    white_wins += 1
+                    println("Episode: $episode, winner: White, number of plays: $number_of_plays")
+                else
+                    black_wins += 1
+                    println("Episode: $episode, winner: Black, number of plays: $number_of_plays")
+                end
+            end
+            total_wins = white_wins + black_wins
+            best_player = nothing
+            best_player_type = nothing
+            if white_wins > black_wins
+                best_player = "White"
+                best_player_type = model_player == Boards.WHITE_PLAYER ? typeof(model) : "Random"
+            elseif white_wins < black_wins
+                best_player = "Black"
+                best_player_type = model_player == Boards.BLACK_PLAYER ? typeof(model) : "Random"
+            end
+            println("White player wins $white_wins time(s) out of $total_wins, that is $(white_wins/total_wins*100)%")
+            println("Black player wins $black_wins time(s) out of $total_wins, that is $(black_wins/total_wins*100)%")
+
+            if best_player != nothing
+                println("Best player is $best_player that is of type $best_player_type")
+             else
+                println("It's a draw")
+            end
+        end
+    end
+    function test(model1::AbstractModel, model2::AbstractModel, number_of_episodes::Int=100)
+        println("Begin testing against another model")
+        for i in 1:2
+            white_wins = 0
+            black_wins = 0
+            if i == 1
+                model1_player = Boards.WHITE_PLAYER
+                model2_player = Boards.BLACK_PLAYER
+            else
+                model1_player = Boards.BLACK_PLAYER
+                model2_player = Boards.WHITE_PLAYER
+            end
+
+            for episode in 1:number_of_episodes
+                board = Boards.init_board()
+                number_of_plays = 0
+                number_of_no_moves = 0
+                current_agent = Boards.whos_first()
+                game_over = false
+                while !game_over
+
+                    dice = Boards.roll_dice()
+                    number_of_plays += 1
+
+                    possible_states = Boards.get_possible_states(current_agent, board, dice)
+                    board_next = nothing
+                    model = current_agent == model1_player ? model1 : model2
+
+                    if model isa AbstractTDGammonZero
+                        if length(possible_states) > 0
+                            board_next, v_next, inputs_next = select_state_td_gammon_zero(model, current_agent, possible_states)
+                        end
+                    end
+
+                    if board_next != nothing
+                        game_over = Boards.game_over(board_next)
+                        board = board_next
+                        number_of_plays += 1
+                        number_of_no_moves = 0
+                    else
+                        number_of_no_moves += 1
+                        if number_of_no_moves > 50
+                            println("Unable to move 50 times")
+                            exit()
+                        end
+                    end
+                    current_agent = (current_agent + 1) % 2
+                end
+                winner = Boards.winner(board)
+                if winner == Boards.WHITE_PLAYER
+                    white_wins += 1
+                    println("Episode: $episode, winner: White, number of plays: $number_of_plays")
+                else
+                    black_wins += 1
+                    println("Episode: $episode, winner: Black, number of plays: $number_of_plays")
+                end
+            end
+            total_wins = white_wins + black_wins
+            best_player = nothing
+            best_player_type = nothing
+            if white_wins > black_wins
+                best_player = "White"
+                best_player_type = model1_player == Boards.WHITE_PLAYER ? typeof(model1) : typeof(model2)
+            elseif white_wins < black_wins
+                best_player = "Black"
+                best_player_type = model1_player == Boards.BLACK_PLAYER ? typeof(model1) : typeof(model2)
+            end
+            println("White player wins $white_wins time(s) out of $total_wins, that is $(white_wins/total_wins*100)%")
+            println("Black player wins $black_wins time(s) out of $total_wins, that is $(black_wins/total_wins*100)%")
+
+            if best_player != nothing
+                println("Best player is $best_player that is of type $best_player_type")
+             else
+                println("It's a draw")
+            end
         end
     end
 #=
@@ -961,15 +1056,19 @@ module Models
     episodes = 4000
 =#
 
-    model = TDGammonTDZero()
-    train(model,"SavedModels\\",1000, 0.1, 0.7, 300000)
+    model = TDGammonZeroRelu()
+    train(model,"SavedModels\\",10000, 0.1, 0.7, 300000)
 
 #=
-    model1 = load_model("C:\\Users\\laure\\Documents\\Julia_Learning\\Board\\SavedModels\\Main.Models.TDGammonTDZero-20210716180556\\Main.Models.TDGammonTDZero-20210716180556-episode11000.bson")
-    model2 = load_model("C:\\Users\\laure\\Documents\\Julia_Learning\\Board\\SavedModels\\Main.Models.TDGammonTDZero-20210717104902\\Main.Models.TDGammonTDZero-20210717104902-episode1.bson")
-    test(model1, model2, 100)
-    test(model2, model1, 100)
+    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210719101607\\Main.Models.TDGammonZeroRelu-20210719101607-episode70000.bson")
+    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210719101607\\Main.Models.TDGammonZeroRelu-20210719101607-episode10000.bson")
+    test(model, 100)
+    println("")
+    println("Model against another model")
+    println("===========================")
+    test(model, model2, 100)
 =#
+
 
 end
 
