@@ -504,6 +504,7 @@ end
 module Models
     using Flux
     using Flux: NNlib
+    using Flux.Losses: mse
     using BSON
     using BSON: @save, @load
     using Dates
@@ -514,8 +515,11 @@ module Models
     abstract type AbstractModel end
     abstract type AbstractTDGammon <: AbstractModel end
     abstract type AbstractTDGammonZero <: AbstractTDGammon end
+    abstract type AbstractTDGammonTDLambda <: AbstractTDGammonZero end
+    abstract type AbstractTDGammonTDZero <: AbstractTDGammonZero end
+    abstract type AbstractTDGammonMonteCarlo <: AbstractTDGammonZero end
 
-    struct TDGammonZero <: AbstractTDGammonZero
+    struct TDGammonZero <: AbstractTDGammonTDLambda
         model::Chain
         TDGammonZero() = new(Chain(
             Dense(196, 40, σ),
@@ -523,14 +527,14 @@ module Models
         ))
     end
 
-    struct TDGammonZeroRelu <:AbstractTDGammonZero
+    struct TDGammonZeroRelu <: AbstractTDGammonTDLambda
         model::Chain
         TDGammonZeroRelu() = new(Chain(
             Dense(196,40, relu),
             Dense(40, 1, σ)
         ))
     end
-    struct TDGammonTDZero <: AbstractTDGammonZero
+    struct TDGammonTDZero <: AbstractTDGammonTDZero
         model::Chain
         TDGammonTDZero() = new(Chain(
             Dense(196, 40, relu),
@@ -538,6 +542,13 @@ module Models
         ))
     end
 
+    struct TDGammonMonteCarlo <: AbstractTDGammonMonteCarlo
+        model::Chain
+        TDGammonMonteCarlo() = new(Chain(
+            Dense(196, 40, relu),
+            Dense(40, 1, σ)
+        ))
+    end
 
     function init_eligibility_traces(model::Chain)::Array
         eligibility_traces = []
@@ -755,7 +766,7 @@ module Models
         return best_state, best_value, best_inputs
     end
 
-    function update_weights(model::AbstractTDGammon, eligibility_traces::Array, α,  λ, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
+    function update_weights_tdlambda(model::AbstractTDGammonTDLambda, eligibility_traces::Array, α,  λ, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
         td_error = next_state_estimate - current_state_estimate
         parameters = Flux.params(model.model)
         gs = gradient(() -> sum(model.model(state_inputs)), parameters)
@@ -768,7 +779,7 @@ module Models
         return td_error
     end
 
-    function update_weights_tdzero(model::TDGammonTDZero, α, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
+    function update_weights_tdzero(model::AbstractTDGammonTDZero, α, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
         td_error = next_state_estimate - current_state_estimate
         parameters = Flux.params(model.model)
         gs = gradient(() -> sum(model.model(state_inputs)), parameters)
@@ -776,6 +787,17 @@ module Models
             Flux.Optimise.update!(weights, -α * td_error * gs[weights])
         end
         return td_error
+    end
+
+    function update_weights_montecarlo(model::AbstractTDGammonMonteCarlo, α, next_state_estimate::Float32, state_inputs::Array)::Float32
+        current_state_estimate = model.model(state_inputs)[1]
+        error = next_state_estimate - current_state_estimate
+        parameters = Flux.params(model.model)
+        gs = gradient(() -> sum(model.model(state_inputs)), parameters)
+        for weights in parameters
+            Flux.Optimise.update!(weights, -α * error * gs[weights])
+        end
+        return error
     end
 
     function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, number_of_episodes::Int=1, episodes_already::Int=0, decay_learning::Bool=false, dl_rate=0.8, dl_step_size::Int=10000)
@@ -809,7 +831,8 @@ module Models
             board = Boards.init_board()
             v = nothing
             inputs = nothing
-            if model isa TDGammonZero || model isa TDGammonZeroRelu
+            afterstates = []
+            if model isa AbstractTDGammonTDLambda
                 eligibility_traces = init_eligibility_traces(model.model)
             end
             number_of_plays = 0
@@ -839,16 +862,27 @@ module Models
                     v_next = current_agent == Boards.WHITE_PLAYER ? Float32(1) : Float32(0)
                 end
                 e = 0
-                if model isa TDGammonTDZero
+                if model isa AbstractTDGammonTDZero
                     if number_of_plays > 1
                         e = abs(update_weights_tdzero(model, α, v, v_next, inputs))
+                        error += e
                     end
-                elseif model isa AbstractTDGammonZero
+                elseif model isa AbstractTDGammonTDLambda
                     if number_of_plays > 1
-                        e = abs(update_weights(model, eligibility_traces, α, λ, v, v_next, inputs))
+                        e = abs(update_weights_tdlambda(model, eligibility_traces, α, λ, v, v_next, inputs))
+                        error += e
+                    end
+                elseif model isa AbstractTDGammonMonteCarlo
+                    if game_over
+                        for i in 1:length(afterstates)
+                            e = abs(update_weights_montecarlo(model, α, v_next, afterstates[i]))
+                            error += e
+                        end
+                    else
+                        push!(afterstates, inputs_next)
+                        #push!(afterstates_value, v_next)
                     end
                 end
-                error += e
                 current_agent = (current_agent + 1) % 2
                 board = board_next
                 v = v_next
@@ -1056,12 +1090,12 @@ module Models
     episodes = 4000
 =#
 
-    model = TDGammonZeroRelu()
+    model = TDGammonTDZero()
     train(model,"SavedModels\\",10000, 0.1, 0.7, 300000)
 
 #=
-    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210719101607\\Main.Models.TDGammonZeroRelu-20210719101607-episode70000.bson")
-    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210719101607\\Main.Models.TDGammonZeroRelu-20210719101607-episode10000.bson")
+    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonMonteCarlo-20210724152920\\Main.Models.TDGammonMonteCarlo-20210724152920-episode300000.bson")
+    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonMonteCarlo-20210724152920\\Main.Models.TDGammonMonteCarlo-20210724152920-episode10000.bson")
     test(model, 100)
     println("")
     println("Model against another model")
