@@ -518,6 +518,7 @@ module Models
     abstract type AbstractTDGammonTDLambda <: AbstractTDGammonZero end
     abstract type AbstractTDGammonTDZero <: AbstractTDGammonZero end
     abstract type AbstractTDGammonMonteCarlo <: AbstractTDGammonZero end
+    abstract type AbstractQGammon <: AbstractTDGammonZero end
 
     struct TDGammonZero <: AbstractTDGammonTDLambda
         model::Chain
@@ -545,6 +546,13 @@ module Models
     struct TDGammonMonteCarlo <: AbstractTDGammonMonteCarlo
         model::Chain
         TDGammonMonteCarlo() = new(Chain(
+            Dense(196, 40, relu),
+            Dense(40, 1, σ)
+        ))
+    end
+    struct QGammon <: AbstractQGammon
+        model::Chain
+        QGammon() = new(Chain(
             Dense(196, 40, relu),
             Dense(40, 1, σ)
         ))
@@ -766,6 +774,18 @@ module Models
         return best_state, best_value, best_inputs
     end
 
+    function ε_greedy(model::AbstractQGammon, player::Int, possible_states::Array, ε=0.1)
+        if rand() < ε
+            next_state = rand(possible_states)
+            next_state_inputs = get_inputs(next_state, player, model)
+            next_v = model.model(next_state_inputs)[1]
+            return next_state, next_v, next_state_inputs, false
+        else
+            next_state, next_v, next_state_inputs = select_state_td_gammon_zero(model, player, possible_states)
+            return next_state, next_v, next_state_inputs, true
+        end
+    end
+
     function update_weights_tdlambda(model::AbstractTDGammonTDLambda, eligibility_traces::Array, α,  λ, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
         td_error = next_state_estimate - current_state_estimate
         parameters = Flux.params(model.model)
@@ -798,6 +818,16 @@ module Models
             Flux.Optimise.update!(weights, -α * error * gs[weights])
         end
         return error
+    end
+
+    function update_weights_qgammon(model::AbstractQGammon, α, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
+        td_error = next_state_estimate - current_state_estimate
+        parameters = Flux.params(model.model)
+        gs = gradient(() -> sum(model.model(state_inputs)), parameters)
+        for weights in parameters
+            Flux.Optimise.update!(weights, -α * td_error * gs[weights])
+        end
+        return td_error
     end
 
     function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, number_of_episodes::Int=1, episodes_already::Int=0, decay_learning::Bool=false, dl_rate=0.8, dl_step_size::Int=10000)
@@ -840,6 +870,7 @@ module Models
             error = 0
             current_agent = Boards.whos_first()
             game_over = false
+            non_greedy_moves = 0
             while !game_over
                 dice = Boards.roll_dice()
                 number_of_plays += 1
@@ -853,8 +884,17 @@ module Models
                 end
                 possible_states = Boards.get_possible_states(current_agent, board, dice)
                 if model isa AbstractTDGammonZero
-                    if length(possible_states) > 0
-                        board_next, v_next, inputs_next = select_state_td_gammon_zero(model, current_agent, possible_states)
+                    if model isa AbstractQGammon
+                        if length(possible_states) > 0
+                            board_next, v_next, inputs_next, greedy = ε_greedy(model,current_agent, possible_states)
+                            if !greedy
+                                non_greedy_moves += 1
+                            end
+                        end
+                    else
+                        if length(possible_states) > 0
+                            board_next, v_next, inputs_next = select_state_td_gammon_zero(model, current_agent, possible_states)
+                        end
                     end
                 end
                 game_over = Boards.game_over(board_next)
@@ -882,6 +922,11 @@ module Models
                         push!(afterstates, inputs_next)
                         #push!(afterstates_value, v_next)
                     end
+                elseif model isa AbstractQGammon
+                    if number_of_plays > 1
+                        e = abs(update_weights_qgammon(model, α, v, v_next, inputs))
+                        error += e
+                    end
                 end
                 current_agent = (current_agent + 1) % 2
                 board = board_next
@@ -895,7 +940,7 @@ module Models
             end
             mean_error = error / number_of_plays
 
-            println("$(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s")): Episode $episode : Winner is $winner_player, number of plays : $number_of_plays, mean error: $mean_error")
+            println("$(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s")): Episode $episode : Winner is $winner_player, number of plays : $number_of_plays, mean error: $mean_error, non_greedy_moves: $non_greedy_moves")
             tab_number_of_plays[tab_number_of_plays_index] = number_of_plays
             tab_mean_errors[tab_number_of_plays_index] = mean_error
             tab_number_of_plays_index += 1
@@ -1090,12 +1135,12 @@ module Models
     episodes = 4000
 =#
 
-    model = TDGammonTDZero()
+    model = QGammon()
     train(model,"SavedModels\\",10000, 0.1, 0.7, 300000)
 
 #=
-    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonMonteCarlo-20210724152920\\Main.Models.TDGammonMonteCarlo-20210724152920-episode300000.bson")
-    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonMonteCarlo-20210724152920\\Main.Models.TDGammonMonteCarlo-20210724152920-episode10000.bson")
+    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.QGammon-20210725112321\\Main.Models.QGammon-20210725112321-episode300000.bson")
+    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.QGammon-20210725112321\\Main.Models.QGammon-20210725112321-episode10000.bson")
     test(model, 100)
     println("")
     println("Model against another model")
