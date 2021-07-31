@@ -514,11 +514,16 @@ module Models
 
     abstract type AbstractModel end
     abstract type AbstractTDGammon <: AbstractModel end
+
     abstract type AbstractTDGammonZero <: AbstractTDGammon end
     abstract type AbstractTDGammonTDLambda <: AbstractTDGammonZero end
     abstract type AbstractTDGammonTDZero <: AbstractTDGammonZero end
     abstract type AbstractTDGammonMonteCarlo <: AbstractTDGammonZero end
     abstract type AbstractQGammon <: AbstractTDGammonZero end
+    abstract type AbstractQGammonZero <: AbstractQGammon end
+    abstract type AbstractQGammonLambda <: AbstractQGammon end
+
+    abstract type AbstractTDGammonExtended <: AbstractTDGammon end
 
     struct TDGammonZero <: AbstractTDGammonTDLambda
         model::Chain
@@ -528,13 +533,30 @@ module Models
         ))
     end
 
-    struct TDGammonZeroRelu <: AbstractTDGammonTDLambda
+    struct TDGammonExtended <: AbstractTDGammonExtended
         model::Chain
-        TDGammonZeroRelu() = new(Chain(
-            Dense(196,40, relu),
+        TDGammonExtended() = new(Chain(
+            Dense(780,40, relu),
             Dense(40, 1, σ)
         ))
     end
+
+    struct TDGammonZeroRelu <: AbstractTDGammonTDLambda
+        model::Chain
+        TDGammonZeroRelu() = new(Chain(
+            Dense(196,40, leakyrelu),
+            Dense(40, 1, σ)
+        ))
+    end
+
+    struct TDGammonZeroReluV2 <: AbstractTDGammonTDLambda
+        model::Chain
+        TDGammonZeroReluV2() = new(Chain(
+            Dense(196,80, relu),
+            Dense(80, 1, σ)
+        ))
+    end
+
     struct TDGammonTDZero <: AbstractTDGammonTDZero
         model::Chain
         TDGammonTDZero() = new(Chain(
@@ -550,9 +572,16 @@ module Models
             Dense(40, 1, σ)
         ))
     end
-    struct QGammon <: AbstractQGammon
+    struct QGammonZero <: AbstractQGammonZero
         model::Chain
-        QGammon() = new(Chain(
+        QGammonZero() = new(Chain(
+            Dense(196, 40, relu),
+            Dense(40, 1, σ)
+        ))
+    end
+    struct QGammonLambda <: AbstractQGammonLambda
+        model::Chain
+        QGammonLambda() = new(Chain(
             Dense(196, 40, relu),
             Dense(40, 1, σ)
         ))
@@ -713,10 +742,88 @@ module Models
         return inputs
     end
 
+    function get_extended_inputs(state::Array)
+        inputs = Float32[]
+        # 720 inputs for the number of checkers on each points
+        for point in 2:25
+            white_input = zeros(Float32, 15)
+            black_input = zeros(Float32, 15)
+            n = state[point]
+            if n != 0
+                if n > 0
+                    white_input[n] = 1
+                else
+                    n = -n
+                    black_input[n] = 1
+                end
+            end
+            #=
+            if n > 0
+                for i in 1:n
+                    white_input[i] = 1
+                end
+            elseif n < 0
+                for i in 1:-n
+                    black_input[i] = 1
+                end
+            end
+            =#
+            append!(inputs, white_input)
+            append!(inputs, black_input)
+        end
+
+        # 30 bar inputs (15 each)
+        white_bar_inputs = zeros(Float32, 15)
+        black_bar_inputs = zeros(Float32, 15)
+        if state[Boards.WHITE_BAR] > 0
+            white_bar_inputs[state[Boards.WHITE_BAR]] = 1
+        end
+        #=
+        for i in 1:state[Boards.WHITE_BAR]
+            white_bar_inputs[i] = 1
+        end
+        =#
+        if state[Boards.BLACK_BAR] > 0
+            black_bar_inputs[state[Boards.BLACK_BAR]] = 1
+        end
+        #=
+        for i in 1:state[Boards.BLACK_BAR]
+            black_bar_inputs[i] = 1
+        end
+        =#
+        append!(inputs, white_bar_inputs)
+        append!(inputs, black_bar_inputs)
+
+        #30 off the board inputs (15 each)
+        white_off_the_board_inputs = zeros(Float32, 15)
+        black_off_the_board_inputs = zeros(Float32, 15)
+        if state[Boards.WHITE_OFF_THE_BOARD_POS] > 0
+            white_off_the_board_inputs[state[Boards.WHITE_OFF_THE_BOARD_POS]] = 1
+        end
+        #=
+        for i in 1:state[Boards.WHITE_OFF_THE_BOARD_POS]
+            white_off_the_board_inputs[i] = 1
+        end
+        =#
+        if state[Boards.BLACK_OFF_THE_BOARD_POS] > 0
+            black_off_the_board_inputs[state[Boards.BLACK_OFF_THE_BOARD_POS]] = 1
+        end
+        #=
+        for i in 1:state[Boards.BLACK_OFF_THE_BOARD_POS]
+            black_off_the_board_inputs[i] = 1
+        end
+        =#
+        append!(inputs, white_off_the_board_inputs)
+        append!(inputs, black_off_the_board_inputs)
+        return inputs
+    end
+
     function get_inputs(state::Array, player::Int, model::AbstractModel)
         inputs = Float32[]
         if model isa AbstractTDGammonZero
             inputs = get_td_zero_inputs(state, player)
+        elseif model isa AbstractTDGammonExtended
+            inputs = get_extended_inputs(state)
         end
         return inputs
     end
@@ -747,7 +854,7 @@ module Models
     #     end
     #     return best_move
     # end
-    function select_state_td_gammon_zero(model::AbstractTDGammonZero, player::Int, possible_states::Array)
+    function select_greedy_state(model::AbstractModel, player::Int, possible_states::Array)
         best_state = Int8[]
         best_value = player == Boards.WHITE_PLAYER ? Float32(-Inf32) : Float32(Inf32)
         best_inputs = nothing
@@ -781,7 +888,7 @@ module Models
             next_v = model.model(next_state_inputs)[1]
             return next_state, next_v, next_state_inputs, false
         else
-            next_state, next_v, next_state_inputs = select_state_td_gammon_zero(model, player, possible_states)
+            next_state, next_v, next_state_inputs = select_greedy_state(model, player, possible_states)
             return next_state, next_v, next_state_inputs, true
         end
     end
@@ -798,7 +905,18 @@ module Models
         end
         return td_error
     end
-
+    function update_weights_tdgammon_extended(model::AbstractTDGammonExtended, eligibility_traces::Array, α,  λ, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
+        td_error = next_state_estimate - current_state_estimate
+        parameters = Flux.params(model.model)
+        gs = gradient(() -> sum(model.model(state_inputs)), parameters)
+        i = 1
+        for weights in parameters
+            eligibility_traces[i] =  λ .* eligibility_traces[i] .+ gs[weights]
+            Flux.Optimise.update!(weights, -α * td_error * eligibility_traces[i])
+            i += 1
+        end
+        return td_error
+    end
     function update_weights_tdzero(model::AbstractTDGammonTDZero, α, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
         td_error = next_state_estimate - current_state_estimate
         parameters = Flux.params(model.model)
@@ -820,7 +938,7 @@ module Models
         return error
     end
 
-    function update_weights_qgammon(model::AbstractQGammon, α, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
+    function update_weights_qgammon_zero(model::AbstractQGammonZero, α, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
         td_error = next_state_estimate - current_state_estimate
         parameters = Flux.params(model.model)
         gs = gradient(() -> sum(model.model(state_inputs)), parameters)
@@ -829,6 +947,20 @@ module Models
         end
         return td_error
     end
+
+    function update_weights_qgammon_lambda(model::AbstractQGammonLambda, eligibility_traces::Array, α, λ, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
+        td_error = next_state_estimate - current_state_estimate
+        parameters = Flux.params(model.model)
+        gs = gradient(() -> sum(model.model(state_inputs)), parameters)
+        i = 1
+        for weights in parameters
+            eligibility_traces[i] =  λ .* eligibility_traces[i] .+ gs[weights]
+            Flux.Optimise.update!(weights, -α * td_error * eligibility_traces[i])
+            i += 1
+        end
+        return td_error
+    end
+
 
     function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, number_of_episodes::Int=1, episodes_already::Int=0, decay_learning::Bool=false, dl_rate=0.8, dl_step_size::Int=10000)
         println("Begin training")
@@ -862,7 +994,7 @@ module Models
             v = nothing
             inputs = nothing
             afterstates = []
-            if model isa AbstractTDGammonTDLambda
+            if model isa AbstractTDGammonTDLambda || model isa AbstractQGammonLambda || model isa AbstractTDGammonExtended
                 eligibility_traces = init_eligibility_traces(model.model)
             end
             number_of_plays = 0
@@ -883,17 +1015,20 @@ module Models
                     exit()
                 end
                 possible_states = Boards.get_possible_states(current_agent, board, dice)
-                if model isa AbstractTDGammonZero
+                if model isa AbstractTDGammonZero || model isa AbstractTDGammonExtended
                     if model isa AbstractQGammon
                         if length(possible_states) > 0
                             board_next, v_next, inputs_next, greedy = ε_greedy(model,current_agent, possible_states)
                             if !greedy
+                                board_greedy, v_greedy, inputs_greedy = select_greedy_state(model, current_agent, possible_states)
                                 non_greedy_moves += 1
+                            else
+                                v_greedy = v_next
                             end
                         end
                     else
                         if length(possible_states) > 0
-                            board_next, v_next, inputs_next = select_state_td_gammon_zero(model, current_agent, possible_states)
+                            board_next, v_next, inputs_next = select_greedy_state(model, current_agent, possible_states)
                         end
                     end
                 end
@@ -901,6 +1036,12 @@ module Models
                 if game_over
                     v_next = current_agent == Boards.WHITE_PLAYER ? Float32(1) : Float32(0)
                 end
+
+                # If greedy action is not chosen, check if the greedy state is terminal
+                if model isa AbstractQGammon && !greedy && Boards.game_over(board_greedy)
+                    v_greedy = current_agent == Boards.WHITE_PLAYER ? Float32(1) : Float32(0)
+                end
+
                 e = 0
                 if model isa AbstractTDGammonTDZero
                     if number_of_plays > 1
@@ -922,9 +1063,22 @@ module Models
                         push!(afterstates, inputs_next)
                         #push!(afterstates_value, v_next)
                     end
-                elseif model isa AbstractQGammon
+                elseif model isa AbstractQGammonZero
                     if number_of_plays > 1
-                        e = abs(update_weights_qgammon(model, α, v, v_next, inputs))
+                        e = abs(update_weights_qgammon_zero(model, α, v, v_greedy, inputs))
+                        error += e
+                    end
+                elseif model isa AbstractQGammonLambda
+                    if number_of_plays > 1
+                        e = abs(update_weights_qgammon_lambda(model, eligibility_traces, α, λ, v, v_greedy, inputs))
+                        error += e
+                        if !greedy
+                            eligibility_traces = init_eligibility_traces(model.model)
+                        end
+                    end
+                elseif model isa AbstractTDGammonExtended
+                    if number_of_plays > 1
+                        e = abs(update_weights_tdgammon_extended(model, eligibility_traces, α, λ, v, v_next, inputs))
                         error += e
                     end
                 end
@@ -1002,9 +1156,9 @@ module Models
                     possible_states = Boards.get_possible_states(current_agent, board, dice)
                     board_next = nothing
                     if model_player == current_agent
-                        if model isa AbstractTDGammonZero
+                        if model isa AbstractTDGammonZero || model isa AbstractTDGammonExtended
                             if length(possible_states) > 0
-                                board_next, v_next, inputs_next = select_state_td_gammon_zero(model, current_agent, possible_states)
+                                board_next, v_next, inputs_next = select_greedy_state(model, current_agent, possible_states)
                             end
                         end
                     else
@@ -1051,6 +1205,7 @@ module Models
              else
                 println("It's a draw")
             end
+            sleep(5)
         end
     end
     function test(model1::AbstractModel, model2::AbstractModel, number_of_episodes::Int=100)
@@ -1081,9 +1236,9 @@ module Models
                     board_next = nothing
                     model = current_agent == model1_player ? model1 : model2
 
-                    if model isa AbstractTDGammonZero
+                    if model isa AbstractTDGammonZero || model isa AbstractTDGammonExtended
                         if length(possible_states) > 0
-                            board_next, v_next, inputs_next = select_state_td_gammon_zero(model, current_agent, possible_states)
+                            board_next, v_next, inputs_next = select_greedy_state(model, current_agent, possible_states)
                         end
                     end
 
@@ -1128,25 +1283,26 @@ module Models
              else
                 println("It's a draw")
             end
+            sleep(5)
         end
     end
 #=
     model_path = "C:\\Users\\laure\\Documents\\Julia_Learning\\Board\\SavedModels\\Main.Models.TDGammonZeroRelu-20210629172535-episode4000.bson"
     episodes = 4000
 =#
-
-    model = QGammon()
-    train(model,"SavedModels\\",10000, 0.1, 0.7, 300000)
-
 #=
-    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.QGammon-20210725112321\\Main.Models.QGammon-20210725112321-episode300000.bson")
-    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.QGammon-20210725112321\\Main.Models.QGammon-20210725112321-episode10000.bson")
-    test(model, 100)
+    model = TDGammonExtended()
+    train(model,"SavedModels\\",10000, 0.1, 0.7, 300000)
+=#
+
+    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonExtended-20210730173946\\Main.Models.TDGammonExtended-20210730173946-episode300000.bson")
+    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210728145546\\Main.Models.TDGammonZeroRelu-20210728145546-episode300000.bson")
+    test(model, 1000)
     println("")
     println("Model against another model")
     println("===========================")
-    test(model, model2, 100)
-=#
+    test(model, model2, 1000)
+
 
 
 end
