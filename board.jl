@@ -42,6 +42,14 @@ module Boards
         return board
     end
 
+    function init_board(values::Dict)
+        board = zeros(Int8, BOARD_POINTS)
+        for key in keys(values)
+            board[key] = values[key]
+        end
+        return board
+    end
+
     function reset(board::Array)
         board = init_board(INIT_BOARD)
         return board
@@ -339,6 +347,7 @@ module Boards
                     state[expected_pos] += 1
                     return [state]
                 end
+                return possible_states
             end
         else
             if board[BLACK_BAR] > 0
@@ -353,6 +362,7 @@ module Boards
                     state[expected_pos] -= 1
                     return [state]
                 end
+                return possible_states
             end
         end
 
@@ -432,6 +442,146 @@ module Boards
             possible_states = [board]
         end
         return  possible_states
+    end
+
+    function get_possible_states_for_a_die_with_move(player::Int, board::Array, die::Int)
+        possible_states = Vector{Int8}[]
+        possible_moves = []
+        if player == WHITE_PLAYER
+            if board[WHITE_BAR] > 0
+                if off_the_bar_allowed(player, die, board)
+                    state = deepcopy(board)
+                    state[WHITE_BAR] -= 1
+                    expected_pos = BLACK_OFF_THE_BOARD_POS - die
+                    # If he will eat a black checker, eat it
+                    if will_eat_checker(player, expected_pos, state)
+                        eat_checker(player, expected_pos, state)
+                    end
+                    state[expected_pos] += 1
+                    move = (WHITE_BAR, expected_pos)
+                    return [state] , [move]
+                end
+                return possible_states, possible_moves
+            end
+        else
+            if board[BLACK_BAR] > 0
+                if off_the_bar_allowed(player, die, board)
+                    state = deepcopy(board)
+                    state[BLACK_BAR] -= 1
+                    expected_pos = 1 + die
+                    # If he will eat a white checker, eat it
+                    if will_eat_checker(player, expected_pos, state)
+                        eat_checker(player, expected_pos, state)
+                    end
+                    state[expected_pos] -= 1
+                    move = (BLACK_BAR, expected_pos)
+                    return [state], [move]
+                end
+                return possible_states, possible_moves
+            end
+        end
+
+        allowed_bear_off = bear_off_allowed(player, board)
+
+        for i in WHITE_OFF_THE_BOARD_POS + 1:BLACK_OFF_THE_BOARD_POS-1
+            if move_allowed(player, i, die, board)
+                state = deepcopy(board)
+                expected_pos = player == WHITE_PLAYER ? i - die : i + die
+
+                # If he will eat a black checker, eat it
+                if will_eat_checker(player, expected_pos, state)
+                    eat_checker(player, expected_pos, state)
+                end
+
+                # Move the checker
+                state[i] = player == WHITE_PLAYER ? state[i] - 1 : state[i] + 1
+                state[expected_pos] = player == WHITE_PLAYER ? state[expected_pos] + 1 : state[expected_pos] - 1
+                push!(possible_states, state)
+                push!(possible_moves, (i, expected_pos))
+            end
+            if allowed_bear_off && checker_out_allowed(player, i, die, board)
+                state = deepcopy(board)
+                # Move the checker
+                state[i] = player == WHITE_PLAYER ? state[i] - 1 : state[i] + 1
+                if player == WHITE_PLAYER
+                    state[WHITE_OFF_THE_BOARD_POS] += 1
+                    push!(possible_moves, (i, WHITE_OFF_THE_BOARD_POS))
+                else
+                    state[BLACK_OFF_THE_BOARD_POS] += 1
+                    push!(possible_moves, (i, BLACK_OFF_THE_BOARD_POS))
+                end
+                push!(possible_states, state)
+            end
+        end
+        return possible_states, possible_moves
+    end
+
+    function get_possible_states_with_move(player::Int, board::Array, dice::Tuple)
+        possible_states = Vector{Int8}[]
+        possible_moves = []
+        d1, d2 = dice
+        d1, d2 = max(d1,d2), min(d1,d2)
+
+        if d1 != d2
+            step_next_states_d1, step_next_moves_d1 = get_possible_states_for_a_die_with_move(player, board, d1)
+            step_next_states_d2, step_next_moves_d2 = get_possible_states_for_a_die_with_move(player, board, d2)
+            step_next_states = [step_next_states_d1, step_next_states_d2]
+            step_next_moves = [step_next_moves_d1, step_next_moves_d2]
+            next_die = (d2, d1)
+            for i in 1:2
+                for j in 1:length(step_next_states[i])
+                    states2, moves2, = get_possible_states_for_a_die_with_move(player, step_next_states[i][j], next_die[i])
+                    for k in 1:length(states2)
+                        if !(states2[k] in possible_states)
+                            push!(possible_states, states2[k])
+                            push!(possible_moves, [step_next_moves[i][j], moves2[k]])
+                        end
+                    end
+                end
+            end
+            if length(possible_states) == 0
+                if length(step_next_states[1]) > 0
+                    possible_states = step_next_states_d1
+                    for move in step_next_moves_d1
+                        push!(possible_moves, [move])
+                    end
+                else
+                    possible_states = step_next_states_d2
+                    for move in step_next_moves_d2
+                        push!(possible_moves, [move])
+                    end
+                end
+            end
+        else
+            depth_next_states = [Vector{Int8}[], Vector{Int8}[], Vector{Int8}[], Vector{Int8}[]]
+            depth_next_moves = [[], [], [], []]
+            depth_next_states[1], moves = get_possible_states_for_a_die_with_move(player, board, d1)
+            for move in moves
+                push!(depth_next_moves[1], [move])
+            end
+            for depth in 2:4
+                for i in 1:length(depth_next_states[depth-1])
+                    states2, moves2 = get_possible_states_for_a_die_with_move(player, depth_next_states[depth-1][i], d1)
+                    for j in 1:length(states2)
+                        if !(states2[j] in depth_next_states[depth])
+                            push!(depth_next_states[depth], states2[j])
+
+                            moves_to_add = deepcopy(depth_next_moves[depth-1][i])
+                            push!(moves_to_add, moves2[j])
+                            #append!(moves_to_add, moves2[j])
+                            push!(depth_next_moves[depth], moves_to_add)
+                        end
+                    end
+                end
+            end
+            max_depth = length(depth_next_states[1]) == 0 ? 1 : maximum([i for i in 1:4 if length(depth_next_states[i]) != 0])
+            possible_states = depth_next_states[max_depth]
+            possible_moves = depth_next_moves[max_depth]
+        end
+        if length(possible_states) == 0
+            possible_states = [board]
+        end
+        return  possible_states, possible_moves
     end
 end
 
@@ -1286,23 +1436,79 @@ module Models
             sleep(5)
         end
     end
+
+    function select_greedy_move(model::AbstractModel, player::Int, possible_states::Array, possible_moves::Array)
+        best_value = player == Boards.WHITE_PLAYER ? Float32(-Inf32) : Float32(Inf32)
+        best_inputs = nothing
+        best_move = []
+        if length(possible_moves) > 0
+            for i in 1:length(possible_states)
+                inputs = get_inputs(possible_states[i], player, model)
+                state_estimate = model.model(inputs)[1]
+                if player == Boards.WHITE_PLAYER
+                    if state_estimate > best_value
+                        best_value = state_estimate
+                        best_move = possible_moves[i]
+                    end
+                else
+                    if state_estimate < best_value
+                        best_value = state_estimate
+                        best_move = possible_moves[i]
+                    end
+                end
+            end
+        end
+        return best_move
+    end
+
+    function select_action_gnubg(model::AbstractModel, player::Int, board::Array, dice::Tuple)::Array
+        possible_states, possible_moves = Boards.get_possible_states_with_move(player, board, dice)
+        next_move = []
+        if length(possible_moves) > 0
+            next_move = select_greedy_move(model, player, possible_states, possible_moves)
+        end
+        return next_move
+    end
+#=
+    model = model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonExtended-20210730173946\\Main.Models.TDGammonExtended-20210730173946-episode300000.bson")
+    pos = Dict(
+    2 => -1,
+    4 => 2,
+    5 => -2,
+    6 => 4,
+    7 => 3,
+    8 => 1,
+    9 => 2,
+    16 => 1,
+    18 => -3,
+    19 => -3,
+    22 => -2,
+    25 => -1,
+    27 => 2
+    )
+    board = Boards.init_board(pos)
+    dice = (5,4)
+    player = Boards.WHITE_PLAYER
+    next_move = select_action_gnubg(model, player, board, dice)
+    println(next_move)
+=#
 #=
     model_path = "C:\\Users\\laure\\Documents\\Julia_Learning\\Board\\SavedModels\\Main.Models.TDGammonZeroRelu-20210629172535-episode4000.bson"
     episodes = 4000
 =#
 #=
-    model = TDGammonExtended()
+    model = TDGammonZeroRelu()
     train(model,"SavedModels\\",10000, 0.1, 0.7, 300000)
 =#
-
-    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonExtended-20210730173946\\Main.Models.TDGammonExtended-20210730173946-episode300000.bson")
-    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Mémoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210728145546\\Main.Models.TDGammonZeroRelu-20210728145546-episode300000.bson")
+#=
+    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210801193120\\Main.Models.TDGammonZeroRelu-20210801193120-episode300000.bson")
+    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210801193120\\Main.Models.TDGammonZeroRelu-20210801193120-episode10000.bson")
     test(model, 1000)
     println("")
     println("Model against another model")
     println("===========================")
     test(model, model2, 1000)
-
+=#
 
 
 end
