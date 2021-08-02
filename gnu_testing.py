@@ -19,7 +19,7 @@ class GNUBG_Interface:
             resp = requests.post(url=self.url, data={"command": command})
             return self.parse_response(resp.json())
         except Exception as e:
-            print(f"Error during connection to {self.url}: {e} (Remember to run gnubg -t -p bridge.py)"
+            print(f"Error during connection to {self.url}: {e} (Remember to run gnubg -t -p bridge.py)")
 
     def parse_board(self, gnubg_board):
         black_pos = gnubg_board[0]
