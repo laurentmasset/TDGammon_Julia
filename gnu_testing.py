@@ -211,5 +211,16 @@ def run_test_vs_gnubg(model_path, env:GNUBG_Env, episodes):
 if __name__ == "__main__":
     interface = GNUBG_Interface(HOST, PORT)
     gnubg_env = GNUBG_Env(interface)
-    model_path = "C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210801193120\\Main.Models.TDGammonZeroRelu-20210801193120-episode300000.bson"
-    run_test_vs_gnubg(model_path, gnubg_env, 100)
+    model_path = "C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZero-20210803004318\\Main.Models.TDGammonZero-20210803004318-episode1500000.bson"
+    run_test_vs_gnubg(model_path, gnubg_env, 10)
+
+    #TODO: Faire le ppg : 
+    # Si simple : 1 pt (ET adversaire : -1 pt)
+    # Si gammon : 2pt (ET adversaire : -2pt)
+    # Si backgammon : 3pt (ET adversaire : -3pt)
+    # ppg = Total(pt joueur)/nb de parties
+    
+    #TODO: Déterminer le score d'une partie
+    # 1. Score = 1 => Si nb de pions dans la position off de l'adversaire > 0
+    # 2. Sinon score = 3 Si le nb de pions en dehors du jan interne > 0
+    # 3. Sinon score = 2
