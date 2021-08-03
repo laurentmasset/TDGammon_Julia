@@ -583,6 +583,52 @@ module Boards
         end
         return  possible_states, possible_moves
     end
+
+    function is_race(board::Array)::Bool
+        checker_count = 0
+        # if at least one checkers is on a bar => it's not a race
+        if board[WHITE_BAR] > 0 || board[BLACK_BAR] > 0
+            return false
+        end
+
+        # count every white checkers on the board and off the board
+        for i in 1:25
+            if board[i] < 0 break # find an opponent checker
+            else checker_count += board[i] end
+            if checker_count == TOTAL_CHECKERS break end # retrieve all checkers
+        end
+        return checker_count == TOTAL_CHECKERS # find every whites checkers before finding a black checker
+    end
+
+    function get_game_score(board::Array, winner::Int)::Int
+        if winner == WHITE_PLAYER
+            if board[BLACK_OFF_THE_BOARD_POS] > 0
+                return 1 # Simple win
+            else
+                checkers_count = 0
+                for i in 20:25 # Count the checkers is the internal jan
+                    checkers_count += -board[i]
+                end
+                # Gammon : All checkers in the internal jan
+                if checkers_count == TOTAL_CHECKERS return 2
+                # Backgammon : At least one checker out of the internal jan
+                else return 3 end
+            end
+        else
+            if board[WHITE_OFF_THE_BOARD_POS] > 0
+                return 1 # Simple win
+            else
+                checkers_count = 0
+                for i in 2:7 # Count the checkers is the internal jan
+                    checkers_count += board[i]
+                end
+                # Gammon : All checkers in the internal jan
+                if checkers_count == TOTAL_CHECKERS return 2
+                # Backgammon : At least one checker out of the internal jan
+                else return 3 end
+            end
+        end
+    end
 end
 
 module HumanAgent
@@ -1469,6 +1515,219 @@ module Models
         end
         return next_move
     end
+
+    ##### Pubeval Part
+    wr = zeros(Float32, 122)
+    wc = zeros(Float32, 122)
+    x = zeros(Float32, 122)
+
+    function convert_board_for_pubeval(computer_player::Int, board::Array)::Vector{Int8}
+        pos = zeros(Int8, 28)
+
+        if computer_player == Boards.WHITE_PLAYER # computer is white player
+            # board locations
+            for i in 2:25
+                pos[i] = board[i]
+            end
+            # computer barmen
+            pos[26] = board[27]
+            # opponent barmen
+            pos[1] = -board[28]
+            # computer's menoff
+            pos[27] = board[1]
+            # opponent's menoff
+            pos[28] = -board[26]
+
+        else # computer is black player
+            # board locations
+            for i in 2:25
+                pos[27 - i] = -board[i]
+            end
+            # computer barmen
+            pos[26] = board[28]
+            # opponent barmen
+            pos[1] = -board[27]
+            # computer's menoff
+            pos[27] = board[26]
+            # opponent's menoff
+            pos[28] = -board[1]
+        end
+        return pos
+    end
+
+    function setx(pos::Vector{Int8})
+        # initialize
+        for i in 1:122 x[i] = 0.0 end
+
+        # first encode board locations 24-1
+        for j in 1:24
+            jm1 = j - 1
+            n = pos[26-j]
+            if n != 0
+                if n == -1 x[5*jm1 + 1] = 1.0 end
+                if n == 1  x[5*jm1 + 2] = 1.0 end
+                if n >= 2  x[5*jm1 + 3] = 1.0 end
+                if n == 3  x[5*jm1 + 4] = 1.0 end
+                if n >= 4  x[5*jm1 + 5] = (n - 3)/2.0 end
+            end
+        end
+        # encode opponent barmen
+        x[121] = pos[1] / 2.0
+        # encode computer's menoff
+        x[122] = pos[27]/15.0
+    end
+
+    function pubeval(race::Bool, pos::Vector{Int8})::Float32
+        if pos[27]==15 return Float32(Inf32) end
+        # all men off, best possible move
+
+        setx(pos) # sets input array x[]
+
+        score = 0.0
+        if race # use race weights
+            for i in 1:122 score += wr[i]*x[i] end
+        else # use contact weights
+            for i in 1:122 score += wc[i]*x[i] end
+        end
+
+        return score
+    end
+
+    function select_pubeval_best_state(player::Int, current_state::Vector{Int8}, possible_states::Array)::Array
+        best_state = Int8[]
+        best_value = Float32(-Inf32)
+        race = Boards.is_race(current_state)
+        for state in possible_states
+            pos = convert_board_for_pubeval(player, state)
+            pos_value = pubeval(race, pos)
+            if pos_value > best_value
+                best_state = state
+                best_value = pos_value
+            end
+        end
+        return best_state
+    end
+
+    function test_vs_pubeval(model::AbstractModel, episodes::Int, model_player::Int)
+        model_name = model_player == Boards.WHITE_PLAYER ? "white" : "black"
+        println("Begin testing against pubeval. Model is $model_name.")
+
+        pubeval_player = (model_player + 1) % 2
+        white_wins = 0
+        black_wins = 0
+        model_score = 0
+        total_gammon_model = 0
+        total_backgammon_model = 0
+        total_simple_model = 0
+        total_gammon_pubeval = 0
+        total_backgammon_pubeval = 0
+        total_simple_pubeval = 0
+
+        for episode in 1:episodes
+            board = Boards.init_board()
+            number_of_plays = 0
+            current_agent = Boards.whos_first()
+            game_over = false
+            while !game_over
+
+                dice = Boards.roll_dice()
+                number_of_plays += 1
+
+                possible_states = Boards.get_possible_states(current_agent, board, dice)
+                board_next = nothing
+
+                if current_agent == model_player
+                    if model isa AbstractTDGammonZero || model isa AbstractTDGammonExtended
+                        if length(possible_states) > 0
+                            board_next, v_next, inputs_next = select_greedy_state(model, current_agent, possible_states)
+                        end
+                    end
+                else
+                    board_next = select_pubeval_best_state(pubeval_player, board, possible_states)
+                end
+
+                if board_next != nothing
+                    game_over = Boards.game_over(board_next)
+                    board = board_next
+                    number_of_plays += 1
+                end
+                current_agent = (current_agent + 1) % 2
+            end
+            winner = Boards.winner(board)
+            game_score = Boards.get_game_score(board, winner)
+            if winner == model_player
+                model_score += game_score
+                if game_score == 1
+                    total_simple_model += 1
+                elseif game_score == 2
+                    total_gammon_model += 1
+                else
+                    total_backgammon_model += 1
+                end
+
+            else
+                model_score -= game_score
+                if game_score == 1
+                    total_simple_pubeval += 1
+                elseif game_score == 2
+                    total_gammon_pubeval += 1
+                else
+                    total_backgammon_pubeval += 1
+                end
+            end
+            if winner == Boards.WHITE_PLAYER
+                white_wins += 1
+                println("Episode: $episode, winner: White, number of plays: $number_of_plays")
+            else
+                black_wins += 1
+                println("Episode: $episode, winner: Black, number of plays: $number_of_plays")
+            end
+        end
+        total_wins = white_wins + black_wins
+        best_player = nothing
+        best_player_type = nothing
+        if white_wins > black_wins
+            best_player = "White"
+            best_player_type = model_player == Boards.WHITE_PLAYER ? typeof(model) : "Pubeval"
+        elseif white_wins < black_wins
+            best_player = "Black"
+            best_player_type = model_player == Boards.BLACK_PLAYER ? typeof(model) : "Pubeval"
+        end
+        println("White player wins $white_wins time(s) out of $total_wins, that is $(white_wins/total_wins*100)%")
+        println("Black player wins $black_wins time(s) out of $total_wins, that is $(black_wins/total_wins*100)%")
+
+        ppg = model_score / total_wins
+        if best_player != nothing
+            println("Best player is $best_player that is of type $best_player_type")
+         else
+            println("It's a draw")
+        end
+        println("The model ppg is $ppg")
+        println("The model made $total_simple_model simple point, $total_gammon_model gammon and $total_backgammon_model backgammon.")
+        println("Pubeval made $total_simple_pubeval simple point, $total_gammon_pubeval gammon and $total_backgammon_pubeval backgammon.")
+        sleep(5)
+        return ppg
+    end
+
+    function rdwts()
+        f = open("WT.race")
+        i = 0
+        for line in eachline(f)
+            i += 1
+            wr[i] = parse(Float32, line)
+        end
+        close(f)
+        f = open("WT.cntc")
+        i = 0
+        for line in eachline(f)
+            i += 1
+            wc[i] = parse(Float32, line)
+        end
+        close(f)
+    end
+
+    rdwts()
+
 #=
     model = model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonExtended-20210730173946\\Main.Models.TDGammonExtended-20210730173946-episode300000.bson")
     pos = Dict(
@@ -1496,13 +1755,21 @@ module Models
     model_path = "C:\\Users\\laure\\Documents\\Julia_Learning\\Board\\SavedModels\\Main.Models.TDGammonZeroRelu-20210629172535-episode4000.bson"
     episodes = 4000
 =#
+
 #=
-    model = TDGammonZeroRelu()
-    train(model,"SavedModels\\",10000, 0.1, 0.7, 300000)
+    model = TDGammonZero()
+    train(model,"SavedModels\\",10000, 0.1, 0.7, 1500000)
 =#
+
 #=
-    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210801193120\\Main.Models.TDGammonZeroRelu-20210801193120-episode300000.bson")
-    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroRelu-20210801193120\\Main.Models.TDGammonZeroRelu-20210801193120-episode10000.bson")
+    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonTDZero-20210802183254\\Main.Models.TDGammonTDZero-20210802183254-episode1500000.bson")
+    test_vs_pubeval(model, 20000, Boards.WHITE_PLAYER)
+    test_vs_pubeval(model, 20000, Boards.BLACK_PLAYER)
+=#
+
+#=
+    model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZero-20210803004318\\Main.Models.TDGammonZero-20210803004318-episode1500000.bson")
+    model2 = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZero-20210803004318\\Main.Models.TDGammonZero-20210803004318-episode10000.bson")
     test(model, 1000)
     println("")
     println("Model against another model")
