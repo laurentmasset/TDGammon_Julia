@@ -740,7 +740,7 @@ module Models
     struct TDGammonZeroRelu <: AbstractTDGammonTDLambda
         model::Chain
         TDGammonZeroRelu() = new(Chain(
-            Dense(196,40, leakyrelu),
+            Dense(196,40, relu),
             Dense(40, 1, σ)
         ))
     end
@@ -752,6 +752,31 @@ module Models
             Dense(80, 1, σ)
         ))
     end
+
+    struct TDGammonZeroV2 <: AbstractTDGammonTDLambda
+        model::Chain
+        TDGammonZeroV2() = new(Chain(
+            Dense(196,80, σ),
+            Dense(80, 1, σ)
+        ))
+    end
+
+    struct TDGammonZeroV3 <: AbstractTDGammonTDLambda
+        model::Chain
+        TDGammonZeroV3() = new(Chain(
+            Dense(196,20, σ),
+            Dense(20,1,σ)
+        ))
+    end
+
+    struct TDGammonZeroV4 <: AbstractTDGammonTDLambda
+        model::Chain
+        TDGammonZeroV4() = new(Chain(
+            Dense(196,10, σ),
+            Dense(10,1,σ)
+        ))
+    end
+
 
     struct TDGammonTDZero <: AbstractTDGammonTDZero
         model::Chain
@@ -1158,7 +1183,7 @@ module Models
     end
 
 
-    function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, number_of_episodes::Int=1, episodes_already::Int=0, decay_learning::Bool=false, dl_rate=0.8, dl_step_size::Int=10000)
+    function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, number_of_episodes::Int=1, episodes_already::Int=0, base_name_already::String="", decay_learning::Bool=false, dl_rate=0.8, dl_step_size::Int=10000)
         println("Begin training")
         tab_number_of_plays = zeros(Int, save_after)
         tab_mean_errors = zeros(Float32, save_after)
@@ -1168,23 +1193,31 @@ module Models
         #last_rolls = []
         first_episode = episodes_already + 1
         last_episode = episodes_already + number_of_episodes
-        base_name = "$(typeof(model))-$(Dates.format(now(), "yyyymmddHHMMSS"))"
-        dir_path = mkdir(string(pwd(),"\\", save_path, base_name))
+        if episodes_already > 0
+            base_name = base_name_already
+            dir_path = string(pwd(),"\\", save_path, base_name)
+        else
+            base_name = "$(typeof(model))-$(Dates.format(now(), "yyyymmddHHMMSS"))"
+            dir_path = mkdir(string(pwd(),"\\", save_path, base_name))
+        end
+
         log_path = string(dir_path, "\\", base_name, "_log.txt")
-        message = """
-        $(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s")): Start training begining at episode $first_episode until episode $last_episode saving every $save_after episodes...
-            - Type of model: $(typeof(model))
-            - Type of NN: $(model.model)
-            - α : $α
-            - λ : $λ
-            - Start time: $(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s"))
-        =================================================================
-        =================================================================
-        """
-        println(message)
-        f = open(log_path, "a")
-        println(f, message)
-        close(f)
+        if episodes_already == 0
+            message = """
+            $(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s")): Start training begining at episode $first_episode until episode $last_episode saving every $save_after episodes...
+                - Type of model: $(typeof(model))
+                - Type of NN: $(model.model)
+                - α : $α
+                - λ : $λ
+                - Start time: $(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s"))
+            =================================================================
+            =================================================================
+            """
+            println(message)
+            f = open(log_path, "a")
+            println(f, message)
+            close(f)
+        end
         for episode in first_episode:last_episode
             board = Boards.init_board()
             v = nothing
@@ -1572,7 +1605,7 @@ module Models
             end
         end
         # encode opponent barmen
-        x[121] = pos[1] / 2.0
+        x[121] = -pos[1] / 2.0
         # encode computer's menoff
         x[122] = pos[27]/15.0
     end
@@ -1693,6 +1726,7 @@ module Models
             best_player = "Black"
             best_player_type = model_player == Boards.BLACK_PLAYER ? typeof(model) : "Pubeval"
         end
+        model_win_average = model_player == Boards.WHITE_PLAYER ? (white_wins/total_wins*100) : (black_wins/total_wins*100)
         println("White player wins $white_wins time(s) out of $total_wins, that is $(white_wins/total_wins*100)%")
         println("Black player wins $black_wins time(s) out of $total_wins, that is $(black_wins/total_wins*100)%")
 
@@ -1705,8 +1739,7 @@ module Models
         println("The model ppg is $ppg")
         println("The model made $total_simple_model simple point, $total_gammon_model gammon and $total_backgammon_model backgammon.")
         println("Pubeval made $total_simple_pubeval simple point, $total_gammon_pubeval gammon and $total_backgammon_pubeval backgammon.")
-        sleep(5)
-        return ppg
+        return ppg, total_simple_model, total_gammon_model, total_backgammon_model, model_win_average
     end
 
     function rdwts()
@@ -1752,15 +1785,63 @@ module Models
     println(next_move)
 =#
 #=
-    model_path = "C:\\Users\\laure\\Documents\\Julia_Learning\\Board\\SavedModels\\Main.Models.TDGammonZeroRelu-20210629172535-episode4000.bson"
-    episodes = 4000
+    model_base_name = "Main.Models.TDGammonZero-20210803174013"
+    model_path = "C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZero-20210803174013\\Main.Models.TDGammonZero-20210803174013-episode125000.bson"
+    episodes_already = 125000
+    model = load_model(model_path)
+    train(model,"SavedModels\\",1000, 0.1, 0.7, 300000- episodes_already, episodes_already, model_base_name)
 =#
 
+    model = TDGammonZeroV3()
+    train(model,"SavedModels\\",1000, 0.1, 0.7, 1000000)
+
+
+    function add_plots(file_path, number_of_episodes::Int, ppg::Float64, simple::Int, gammon::Int, backgammon::Int, average::Float64)
+        f = open(file_path, "a")
+        write(f, "$number_of_episodes,$ppg,$simple,$gammon,$backgammon,$average\n")
+        close(f)
+    end
 #=
-    model = TDGammonZero()
-    train(model,"SavedModels\\",10000, 0.1, 0.7, 1500000)
+    models_path = "C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroReluV2-20210804193505\\Main.Models.TDGammonZeroReluV2-20210804193505-episode"
+    plots_path = "C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroReluV2-20210804193505\\plots.csv"
+    most_trained = 300000
+    save_step = 5000
+    steps = most_trained/save_step
+    f = open(plots_path, "w")
+    write(f, "episodes,ppg,simple,gammon,backgammon,average\n")
+    close(f)
+    for i in 1:steps
+        model_number = convert(Int, i * save_step)
+        model = load_model("$(models_path)$model_number.bson")
+        ppg_white, simple_white, gammon_white, backgammon_white, average_white = test_vs_pubeval(model, 500, Boards.WHITE_PLAYER)
+        ppg_black, simple_black, gammon_black, backgammon_black, average_black = test_vs_pubeval(model, 500, Boards.BLACK_PLAYER)
+        average_ppg = (ppg_white + ppg_black) /2
+        average_wins = (average_white + average_black) /2
+        total_simple = simple_white + simple_black
+        total_gammon = gammon_white + gammon_black
+        total_backgammon = backgammon_white + backgammon_black
+        add_plots(plots_path, model_number, average_ppg, total_simple, total_gammon, total_backgammon, average_wins)
+    end
 =#
+#=
+    pos_main = Dict(
+        1 => 5,
+        3 => 5,
+        4 => -5,
+        13 => 5,
+        14 => -5,
+        18 => -5
+    )
 
+    board = Boards.init_board(pos_main)
+
+    r = Boards.is_race(board)
+    p = convert_board_for_pubeval(Boards.BLACK_PLAYER, board)
+    println(p)
+
+    val = pubeval(r, p)
+    println(val)
+=#
 #=
     model = load_model("C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonTDZero-20210802183254\\Main.Models.TDGammonTDZero-20210802183254-episode1500000.bson")
     test_vs_pubeval(model, 20000, Boards.WHITE_PLAYER)
