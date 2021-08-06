@@ -612,7 +612,7 @@ module Boards
                 # Gammon : All checkers in the internal jan
                 if checkers_count == TOTAL_CHECKERS return 2
                 # Backgammon : At least one checker out of the internal jan
-                else return 3 end
+                else return 2 end
             end
         else
             if board[WHITE_OFF_THE_BOARD_POS] > 0
@@ -625,7 +625,7 @@ module Boards
                 # Gammon : All checkers in the internal jan
                 if checkers_count == TOTAL_CHECKERS return 2
                 # Backgammon : At least one checker out of the internal jan
-                else return 3 end
+                else return 2 end
             end
         end
     end
@@ -1195,10 +1195,10 @@ module Models
         last_episode = episodes_already + number_of_episodes
         if episodes_already > 0
             base_name = base_name_already
-            dir_path = string(pwd(),"\\", save_path, base_name)
+            dir_path = save_path
         else
             base_name = "$(typeof(model))-$(Dates.format(now(), "yyyymmddHHMMSS"))"
-            dir_path = mkdir(string(pwd(),"\\", save_path, base_name))
+            dir_path = mkdir(string(save_path, base_name))
         end
 
         log_path = string(dir_path, "\\", base_name, "_log.txt")
@@ -1791,15 +1791,41 @@ module Models
     model = load_model(model_path)
     train(model,"SavedModels\\",1000, 0.1, 0.7, 300000- episodes_already, episodes_already, model_base_name)
 =#
-
+#=
     model = TDGammonZeroV3()
     train(model,"SavedModels\\",1000, 0.1, 0.7, 1000000)
+=#
 
-
-    function add_plots(file_path, number_of_episodes::Int, ppg::Float64, simple::Int, gammon::Int, backgammon::Int, average::Float64)
+    function add_plots(file_path, number_of_episodes::Int, ppg::Float64, average::Float64)
         f = open(file_path, "a")
-        write(f, "$number_of_episodes,$ppg,$simple,$gammon,$backgammon,$average\n")
+        write(f, "$number_of_episodes,$ppg,$average\n")
         close(f)
+    end
+
+    function test_and_save_pubeval(models_path, model_base_name, last_model_number::Int, step::Int, episodes::Int, resume::Bool=false, resume_from::Int=0)
+        first = resume ? resume_to / step : 1
+        last = last_model_number / step
+        plots_path = string(models_path, model_base_name, ".csv")
+        if !resume
+            write_mode = resume ? "a" : "w"
+            f = open(plots_path, write_mode)
+            write(f, "episodes,ppg,average\n")    
+            close(f)
+        end
+        
+        for i in first:last
+            model_number = convert(Int, i * step)
+            model_path = string(models_path, model_base_name, "-episode", model_number, ".bson")
+            model = load_model(model_path)
+            ppg_white, simple_white, gammon_white, backgammon_white, average_white = test_vs_pubeval(model, episodes, Boards.WHITE_PLAYER)
+            ppg_black, simple_black, gammon_black, backgammon_black, average_black = test_vs_pubeval(model, episodes, Boards.BLACK_PLAYER)
+            average_ppg = (ppg_white + ppg_black) /2
+            average_wins = (average_white + average_black) /2
+            total_simple = simple_white + simple_black
+            total_gammon = gammon_white + gammon_black
+            total_backgammon = backgammon_white + backgammon_black
+            add_plots(plots_path, model_number, average_ppg, average_wins)
+        end
     end
 #=
     models_path = "C:\\Users\\laure\\Documents\\UMONS\\Memoires\\TDGammon_Julia\\SavedModels\\Main.Models.TDGammonZeroReluV2-20210804193505\\Main.Models.TDGammonZeroReluV2-20210804193505-episode"
@@ -1820,7 +1846,7 @@ module Models
         total_simple = simple_white + simple_black
         total_gammon = gammon_white + gammon_black
         total_backgammon = backgammon_white + backgammon_black
-        add_plots(plots_path, model_number, average_ppg, total_simple, total_gammon, total_backgammon, average_wins)
+        add_plots(plots_path, model_number, average_ppg, average_wins)
     end
 =#
 #=
