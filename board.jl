@@ -1803,7 +1803,7 @@ module Models
     end
 
     function test_and_save_pubeval(models_path, model_base_name, last_model_number::Int, step::Int, episodes::Int, resume::Bool=false, resume_from::Int=0)
-        first = resume ? resume_to / step : 1
+        first = resume ? resume_from / step : 1
         last = last_model_number / step
         plots_path = string(models_path, model_base_name, ".csv")
         if !resume
