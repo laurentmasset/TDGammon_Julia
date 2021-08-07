@@ -113,6 +113,7 @@ def test(args):
     episodes = args.eps
     resume = args.resume
     resume_from = args.resume_from
+    count_backgammon = args.backgammon
 
     if not args.path:
         print(f"The path is missing or doesn't exist!")
@@ -127,7 +128,7 @@ def test(args):
     print("Loading Julia code. Testing should start soon...")
     from julia import Main
     Main.include("board.jl")
-    Main.Models.test_and_save_pubeval(path, model_basename, last, step, episodes, resume, resume_from)
+    Main.Models.test_and_save_pubeval(path, model_basename, last, step, episodes, resume, resume_from, count_backgammon)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="TDGammon trainer", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -153,6 +154,7 @@ if __name__ == '__main__':
     test_parser.add_argument("--eps", help="The number of episodes to test for each step episode (will be played twice, one time for each color)", type=int, default=5000)
     test_parser.add_argument("--resume", help="Specify that you want to resume a stopped test", action='store_true')
     test_parser.add_argument("--resume_from", help="Specify the first episode to resume from (used with --resume)", type=int, default=0)
+    test_parser.add_argument("--backgammon", help="Specify that you want to count the backgammon points", action='store_true')
 
     test_parser.set_defaults(func=test)
       
