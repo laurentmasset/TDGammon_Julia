@@ -600,7 +600,7 @@ module Boards
         return checker_count == TOTAL_CHECKERS # find every whites checkers before finding a black checker
     end
 
-    function get_game_score(board::Array, winner::Int)::Int
+    function get_game_score(board::Array, winner::Int, count_backgammon::Bool = false)::Int
         if winner == WHITE_PLAYER
             if board[BLACK_OFF_THE_BOARD_POS] > 0
                 return 1 # Simple win
@@ -612,7 +612,10 @@ module Boards
                 # Gammon : All checkers in the internal jan
                 if checkers_count == TOTAL_CHECKERS return 2
                 # Backgammon : At least one checker out of the internal jan
-                else return 2 end
+                else
+                    score = count_backgammon ? 3 : 2
+                    return score
+                end
             end
         else
             if board[WHITE_OFF_THE_BOARD_POS] > 0
@@ -625,7 +628,7 @@ module Boards
                 # Gammon : All checkers in the internal jan
                 if checkers_count == TOTAL_CHECKERS return 2
                 # Backgammon : At least one checker out of the internal jan
-                else return 2 end
+                else return 3 end
             end
         end
     end
@@ -1641,7 +1644,7 @@ module Models
         return best_state
     end
 
-    function test_vs_pubeval(model::AbstractModel, episodes::Int, model_player::Int)
+    function test_vs_pubeval(model::AbstractModel, episodes::Int, model_player::Int, count_backgammon::Bool=false)
         model_name = model_player == Boards.WHITE_PLAYER ? "white" : "black"
         println("Begin testing against pubeval. Model is $model_name.")
 
@@ -1687,7 +1690,7 @@ module Models
                 current_agent = (current_agent + 1) % 2
             end
             winner = Boards.winner(board)
-            game_score = Boards.get_game_score(board, winner)
+            game_score = Boards.get_game_score(board, winner, count_backgammon)
             if winner == model_player
                 model_score += game_score
                 if game_score == 1
@@ -1802,7 +1805,7 @@ module Models
         close(f)
     end
 
-    function test_and_save_pubeval(models_path, model_base_name, last_model_number::Int, step::Int, episodes::Int, resume::Bool=false, resume_from::Int=0)
+    function test_and_save_pubeval(models_path, model_base_name, last_model_number::Int, step::Int, episodes::Int, resume::Bool=false, resume_from::Int=0, count_backgammon::Bool= false)
         first = resume ? resume_from / step : 1
         last = last_model_number / step
         plots_path = string(models_path, model_base_name, ".csv")
@@ -1817,8 +1820,8 @@ module Models
             model_number = convert(Int, i * step)
             model_path = string(models_path, model_base_name, "-episode", model_number, ".bson")
             model = load_model(model_path)
-            ppg_white, simple_white, gammon_white, backgammon_white, average_white = test_vs_pubeval(model, episodes, Boards.WHITE_PLAYER)
-            ppg_black, simple_black, gammon_black, backgammon_black, average_black = test_vs_pubeval(model, episodes, Boards.BLACK_PLAYER)
+            ppg_white, simple_white, gammon_white, backgammon_white, average_white = test_vs_pubeval(model, episodes, Boards.WHITE_PLAYER, count_backgammon)
+            ppg_black, simple_black, gammon_black, backgammon_black, average_black = test_vs_pubeval(model, episodes, Boards.BLACK_PLAYER, count_backgammon)
             average_ppg = (ppg_white + ppg_black) /2
             average_wins = (average_white + average_black) /2
             total_simple = simple_white + simple_black
