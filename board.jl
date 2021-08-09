@@ -628,7 +628,10 @@ module Boards
                 # Gammon : All checkers in the internal jan
                 if checkers_count == TOTAL_CHECKERS return 2
                 # Backgammon : At least one checker out of the internal jan
-                else return 3 end
+                else 
+                    score = count_backgammon ? 3 : 2
+                    return score
+                end
             end
         end
     end
