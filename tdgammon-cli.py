@@ -5,6 +5,7 @@ import sys
 TDGammonZero = "classic"
 TDGammonZeroRelu = "classic_relu"
 TDGammonZeroReluV2 = "relu_80"
+TDGammonZeroLeakyRelu = "classic_leaky"
 TDGammonZeroV2 = "classic_80"
 TDGammonZeroV3 = "classic_20"
 TDGammonZeroV4 = "classic_10"
@@ -17,6 +18,7 @@ MODEL_TYPE = [
     TDGammonZero,
     TDGammonZeroRelu,
     TDGammonZeroReluV2,
+    TDGammonZeroLeakyRelu,
     TDGammonZeroV2,
     TDGammonZeroV3,
     TDGammonZeroV4,
@@ -87,6 +89,8 @@ def train_with_args(args):
             model = Main.Models.TDGammonZeroRelu()
         if model_type == TDGammonZeroReluV2:
             model = Main.Models.TDGammonZeroReluV2()
+        if model_type == TDGammonZeroLeakyRelu:
+            model = Main.Models.TDGammonZeroLeakyRelu()
         if model_type == TDGammonZeroV2:
             model = Main.Models.TDGammonZeroV2()
         if model_type == TDGammonZeroV3:

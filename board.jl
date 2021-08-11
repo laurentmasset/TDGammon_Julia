@@ -751,6 +751,14 @@ module Models
         ))
     end
 
+    struct TDGammonZeroLeakyRelu <: AbstractTDGammonTDLambda
+        model::Chain
+        TDGammonZeroLeakyRelu() = new(Chain(
+            Dense(196,40, leakyrelu),
+            Dense(40, 1, σ)
+        ))
+    end
+
     struct TDGammonZeroReluV2 <: AbstractTDGammonTDLambda
         model::Chain
         TDGammonZeroReluV2() = new(Chain(
