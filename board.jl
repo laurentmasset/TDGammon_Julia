@@ -735,6 +735,15 @@ module Models
         ))
     end
 
+    struct TDGammonZeroOriginal <: AbstractTDGammonTDLambda
+        model::Chain
+        TDGammonZeroOriginal() = new(Chain(
+            Dense(198, 40, σ),
+            Dense(40, 4, σ)
+        ))
+    end
+    
+
     struct TDGammonExtended <: AbstractTDGammonExtended
         model::Chain
         TDGammonExtended() = new(Chain(
@@ -747,6 +756,14 @@ module Models
         model::Chain
         TDGammonZeroRelu() = new(Chain(
             Dense(196,40, relu),
+            Dense(40, 1, σ)
+        ))
+    end
+
+    struct TDGammonZeroLeakyRelu <: AbstractTDGammonTDLambda
+        model::Chain
+        TDGammonZeroLeakyRelu() = new(Chain(
+            Dense(196,40, leakyrelu),
             Dense(40, 1, σ)
         ))
     end
@@ -787,29 +804,36 @@ module Models
     struct TDGammonTDZero <: AbstractTDGammonTDZero
         model::Chain
         TDGammonTDZero() = new(Chain(
-            Dense(196, 40, relu),
+            Dense(196, 40, σ),
             Dense(40, 1, σ)
+        ))
+    end
+    struct TDGammonTDZeroOriginal <: AbstractTDGammonTDZero
+        model::Chain
+        TDGammonTDZeroOriginal() = new(Chain(
+            Dense(198, 40, σ),
+            Dense(40, 4, σ)
         ))
     end
 
     struct TDGammonMonteCarlo <: AbstractTDGammonMonteCarlo
         model::Chain
         TDGammonMonteCarlo() = new(Chain(
-            Dense(196, 40, relu),
+            Dense(196, 40, σ),
             Dense(40, 1, σ)
         ))
     end
     struct QGammonZero <: AbstractQGammonZero
         model::Chain
         QGammonZero() = new(Chain(
-            Dense(196, 40, relu),
+            Dense(196, 40, σ),
             Dense(40, 1, σ)
         ))
     end
     struct QGammonLambda <: AbstractQGammonLambda
         model::Chain
         QGammonLambda() = new(Chain(
-            Dense(196, 40, relu),
+            Dense(196, 40, σ),
             Dense(40, 1, σ)
         ))
     end
@@ -818,6 +842,15 @@ module Models
         eligibility_traces = []
         for p in params(model)
             push!(eligibility_traces, zeros(Float32, size(p)))
+        end
+        return eligibility_traces
+    end
+
+    function init_eligibility_traces_original(model::Chain)::Array
+        eligibility_traces = []
+        for i in 1:4
+            et = init_eligibility_traces(model)
+            push!(eligibility_traces, et)
         end
         return eligibility_traces
     end
@@ -849,6 +882,37 @@ module Models
         if n > 3 # A "multiple spare" situation
             point_inputs[4] = (n - 3) / 2
         end
+
+        return point_inputs
+    end
+
+    function get_td_zero_original_point_inputs(point::Int, state::Array, player::Int)::Array
+        point_inputs = zeros(Float32, 4)
+        n = state[point]
+        if player == Boards.BLACK_PLAYER
+            n = -n
+        end
+        
+        if 1 <= n <= 3
+            point_inputs[n] = 1
+        elseif n > 3
+            point_inputs[4] = (n - 3) / 2
+        end
+        
+
+        # if n == 1  # A "blot" situation
+        #     point_inputs[1] = 1
+        # end
+        # if n > 1 # A "made point" situation
+        #     point_inputs[2] = 1
+        # end
+        # if n == 3 # A "single spare" situation
+        #     point_inputs[3] = 1
+        # end
+
+        # if n > 3 # A "multiple spare" situation
+        #     point_inputs[4] = (n - 3) / 2
+        # end
 
         return point_inputs
     end
@@ -969,6 +1033,83 @@ module Models
         return inputs
     end
 
+    function get_td_zero_origin_inputs(state::Array, player::Int)::Array
+        inputs = Float32[]
+
+        #= POSSIBLE VERSION : Reversing inputs for black player
+
+        # 192 inputs representing each player situation for each point
+        if player == Boards.WHITE_PLAYER
+            for point in 2:25
+                white_inputs = get_td_zero_point_inputs(point,state, Boards.WHITE_PLAYER)
+                black_inputs = get_td_zero_point_inputs(point, state, Boards.BLACK_PLAYER)
+                append!(inputs, white_inputs)
+                append!(inputs, black_inputs)
+            end
+        else
+            for point in 25:-1:2
+                white_inputs = get_td_zero_point_inputs(point,state, Boards.WHITE_PLAYER)
+                black_inputs = get_td_zero_point_inputs(point, state, Boards.BLACK_PLAYER)
+                append!(inputs, black_inputs)
+                append!(inputs, white_inputs)
+            end
+        end
+        # 2 inputs representing the number of checkers on the bar for each player
+        white_bar_input = get_td_zero_bar_input(state, Boards.WHITE_PLAYER)
+        black_bar_input = get_td_zero_bar_input(state, Boards.BLACK_PLAYER)
+        if player == Boards.WHITE_PLAYER
+            push!(inputs, white_bar_input)
+            push!(inputs, black_bar_input)
+        else
+            push!(inputs, black_bar_input)
+            push!(inputs, white_bar_input)
+        end
+
+        # 2 inputs representing the number of checkers off the board for each player
+        white_off_the_board_input = get_td_zero_off_the_board_input(state, Boards.WHITE_PLAYER)
+        black_off_the_board_input = get_td_zero_off_the_board_input(state, Boards.BLACK_PLAYER)
+        if player == Boards.WHITE_PLAYER
+            push!(inputs, white_off_the_board_input)
+            push!(inputs, black_off_the_board_input)
+        else
+            push!(inputs, black_off_the_board_input)
+            push!(inputs, white_off_the_board_input)
+        end
+
+        # 2 inputs representing whether it is white's or black's turn to move
+        players_turn_input = get_players_turn_input(player, players_turn)
+        append!(inputs, players_turn_input)
+        =#
+
+
+        # 192 inputs representing each player situation for each point
+        for point in 2:25
+            white_inputs = get_td_zero_point_inputs(point,state, Boards.WHITE_PLAYER)
+            black_inputs = get_td_zero_point_inputs(point, state, Boards.BLACK_PLAYER)
+            append!(inputs, white_inputs)
+            append!(inputs, black_inputs)
+        end
+
+        # 2 inputs representing the number of checkers on the bar for each player
+        white_bar_input = get_td_zero_bar_input(state, Boards.WHITE_PLAYER)
+        black_bar_input = get_td_zero_bar_input(state, Boards.BLACK_PLAYER)
+        push!(inputs, white_bar_input)
+        push!(inputs, black_bar_input)
+
+        # 2 inputs representing the number of checkers off the board for each player
+        white_off_the_board_input = get_td_zero_off_the_board_input(state, Boards.WHITE_PLAYER)
+        black_off_the_board_input = get_td_zero_off_the_board_input(state, Boards.BLACK_PLAYER)
+        push!(inputs, white_off_the_board_input)
+        push!(inputs, black_off_the_board_input)
+
+
+        # 2 inputs representing whether it is white's or black's turn to move
+        players_turn_input = get_players_turn_input(player)
+        append!(inputs, players_turn_input)
+
+        return inputs
+    end
+
     function get_extended_inputs(state::Array)
         inputs = Float32[]
         # 720 inputs for the number of checkers on each points
@@ -1047,7 +1188,9 @@ module Models
 
     function get_inputs(state::Array, player::Int, model::AbstractModel)
         inputs = Float32[]
-        if model isa AbstractTDGammonZero
+        if model isa TDGammonZeroOriginal || model isa TDGammonTDZeroOriginal
+            inputs = get_td_zero_origin_inputs(state, player)
+        elseif model isa AbstractTDGammonZero
             inputs = get_td_zero_inputs(state, player)
         elseif model isa AbstractTDGammonExtended
             inputs = get_extended_inputs(state)
@@ -1085,25 +1228,36 @@ module Models
         best_state = Int8[]
         best_value = player == Boards.WHITE_PLAYER ? Float32(-Inf32) : Float32(Inf32)
         best_inputs = nothing
+        best_outputs = nothing
 
         if length(possible_states) > 0
             for state in possible_states
                 inputs = get_inputs(state, player, model)
-                state_estimate = model.model(inputs)[1]
+                outputs = model.model(inputs)
+                if model isa TDGammonZeroOriginal || model isa TDGammonTDZeroOriginal
+                    state_estimate = outputs[1] + 2 * outputs[2] - outputs[3] - 2 * outputs[4]
+                else
+                    state_estimate = model.model(inputs)[1]
+                end
                 if player == Boards.WHITE_PLAYER
                     if state_estimate > best_value
                         best_state = deepcopy(state)
                         best_value = state_estimate
                         best_inputs = inputs
+                        best_outputs = outputs
                     end
                 else
                     if state_estimate < best_value
                         best_state = deepcopy(state)
                         best_value = state_estimate
                         best_inputs = inputs
+                        best_outputs = outputs
                     end
                 end
             end
+        end
+        if model isa TDGammonZeroOriginal || model isa TDGammonTDZeroOriginal
+            return best_state, best_outputs, best_inputs
         end
         return best_state, best_value, best_inputs
     end
@@ -1132,6 +1286,23 @@ module Models
         end
         return td_error
     end
+    
+    function update_weights_tdlambda(model::AbstractTDGammonTDLambda, eligibility_traces::Array, α,  λ, current_state_estimate::Vector{Float32}, next_state_estimate::Vector{Float32}, state_inputs::Array)::Float32
+        td_errors = next_state_estimate - current_state_estimate
+        parameters = Flux.params(model.model)
+        list_gs = [ gradient(() -> model.model(state_inputs)[i], parameters) for i=1:4 ]
+        i = 1
+        for weights in parameters
+            for j in 1:4
+                eligibility_traces[j][i] = λ .* eligibility_traces[j][i] .+ list_gs[j][weights]
+            end
+            sum_of_td_errors = td_errors[1] * eligibility_traces[1][i] + td_errors[2] * eligibility_traces[2][i] + td_errors[3] * eligibility_traces[3][i] + td_errors[4] * eligibility_traces[4][i]
+            Flux.Optimise.update!(weights, -α * sum_of_td_errors)
+            i += 1
+        end
+        return sum(td_errors)
+    end
+    
     function update_weights_tdgammon_extended(model::AbstractTDGammonExtended, eligibility_traces::Array, α,  λ, current_state_estimate::Float32, next_state_estimate::Float32, state_inputs::Array)::Float32
         td_error = next_state_estimate - current_state_estimate
         parameters = Flux.params(model.model)
@@ -1152,6 +1323,17 @@ module Models
             Flux.Optimise.update!(weights, -α * td_error * gs[weights])
         end
         return td_error
+    end
+
+    function update_weights_tdzero(model::AbstractTDGammonTDZero, α, current_state_estimate::Vector{Float32}, next_state_estimate::Vector{Float32}, state_inputs::Array)::Float32
+        td_errors = next_state_estimate - current_state_estimate
+        parameters = Flux.params(model.model)
+        list_gs = [ gradient(() -> model.model(state_inputs)[i], parameters) for i=1:4 ]
+        for weights in parameters
+            sum_of_td_errors = td_errors[1]*list_gs[1][weights] + td_errors[2]*list_gs[2][weights] + td_errors[3]*list_gs[3][weights] + td_errors[4]*list_gs[4][weights]
+            Flux.Optimise.update!(weights, -α * sum_of_td_errors)
+        end
+        return sum(td_errors)
     end
 
     function update_weights_montecarlo(model::AbstractTDGammonMonteCarlo, α, next_state_estimate::Float32, state_inputs::Array)::Float32
@@ -1189,7 +1371,7 @@ module Models
     end
 
 
-    function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, number_of_episodes::Int=1, episodes_already::Int=0, base_name_already::String="", decay_learning::Bool=false, dl_rate=0.8, dl_step_size::Int=10000)
+    function train(model::AbstractModel, save_path::String, save_after::Int, α=0.1, λ=0.7, ε=0.1, number_of_episodes::Int=1, episodes_already::Int=0, base_name_already::String="", decay_learning::Bool=false, dl_rate=0.8, dl_step_size::Int=10000)
         println("Begin training")
         tab_number_of_plays = zeros(Int, save_after)
         tab_mean_errors = zeros(Float32, save_after)
@@ -1215,6 +1397,7 @@ module Models
                 - Type of NN: $(model.model)
                 - α : $α
                 - λ : $λ
+                - ε : $ε
                 - Start time: $(Dates.format(now(), "dd-mm-yyyy HH:MM:SS:s"))
             =================================================================
             =================================================================
@@ -1229,7 +1412,9 @@ module Models
             v = nothing
             inputs = nothing
             afterstates = []
-            if model isa AbstractTDGammonTDLambda || model isa AbstractQGammonLambda || model isa AbstractTDGammonExtended
+            if model isa TDGammonZeroOriginal
+                eligibility_traces = init_eligibility_traces_original(model.model)
+            elseif model isa AbstractTDGammonTDLambda || model isa AbstractQGammonLambda || model isa AbstractTDGammonExtended
                 eligibility_traces = init_eligibility_traces(model.model)
             end
             number_of_plays = 0
@@ -1253,7 +1438,7 @@ module Models
                 if model isa AbstractTDGammonZero || model isa AbstractTDGammonExtended
                     if model isa AbstractQGammon
                         if length(possible_states) > 0
-                            board_next, v_next, inputs_next, greedy = ε_greedy(model,current_agent, possible_states)
+                            board_next, v_next, inputs_next, greedy = ε_greedy(model,current_agent, possible_states, ε)
                             if !greedy
                                 board_greedy, v_greedy, inputs_greedy = select_greedy_state(model, current_agent, possible_states)
                                 non_greedy_moves += 1
@@ -1269,7 +1454,17 @@ module Models
                 end
                 game_over = Boards.game_over(board_next)
                 if game_over
-                    v_next = current_agent == Boards.WHITE_PLAYER ? Float32(1) : Float32(0)
+                    if model isa TDGammonZeroOriginal || model isa TDGammonTDZeroOriginal
+                        winner = Boards.winner(board_next)
+                        score = Boards.get_game_score(board_next, winner)
+                        if winner == Boards.WHITE_PLAYER
+                            v_next = score == 1 ? Float32[1.,0.,0.,0.] : Float32[0.,1.,0.,0.]
+                        else
+                            v_next = score == 1 ? Float32[0.,0.,1.,0.] : Float32[0.,0.,0.,1.]
+                        end
+                    else
+                        v_next = current_agent == Boards.WHITE_PLAYER ? Float32(1) : Float32(0)
+                    end
                 end
 
                 # If greedy action is not chosen, check if the greedy state is terminal
@@ -1764,7 +1959,24 @@ module Models
         end
         close(f)
     end
-
+    function get_opening_moves(model::AbstractModel)
+        board = Boards.init_board()
+        result = Dict()
+        for d1 in 1:5
+            d2 = d1 + 1
+            while d2 <= 6
+                dice = (d2, d1)
+                possible_states, possible_moves = Boards.get_possible_states_with_move(Boards.WHITE_PLAYER, board, dice)
+                next_move = []
+                if length(possible_moves) > 0
+                    next_move = select_greedy_move(model, Boards.WHITE_PLAYER, possible_states, possible_moves)                    
+                end
+                push!(result, dice => next_move)
+                d2 += 1
+            end
+        end
+        return result
+    end
     rdwts()
 
 #=
